@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pico W Monitor</title>
+    <style>
+        /* CSS Variable Definitions for easy theme management */
+        :root {
+            --primary-color: #00d1b2;
+            --bg-dark: #1a1a1a;
+            --card-bg: #2d2d2d;
+            --text-main: #eeeeee;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        /* Main Dashboard Card */
+        .card {
+            background: var(--card-bg);
+            padding: 30px;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.5);
+            text-align: center;
+            width: 300px;
+            border: 1px solid #444;
+        }
+
+        h1 {
+            font-size: 14px;
+            color: #888;
+            margin: 0;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        /* Temperature Display Area */
+        .temp-display {
+            margin: 25px 0;
+        }
+
+        #temp-val {
+            font-size: 64px;
+            font-weight: bold;
+            color: var(--primary-color);
+        }
+
+        .unit {
+            font-size: 24px;
+            color: #666;
+            margin-left: 5px;
+        }
+
+        /* Connection Status Indicator */
+        .status-footer {
+            border-top: 1px solid #3d3d3d;
+            padding-top: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: #777;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            background-color: #ff3860; /* Red = Disconnected */
+            border-radius: 50%;
+            margin-right: 10px;
+            transition: 0.3s;
+        }
+
+        .status-dot.online {
+            background-color: #23d160; /* Green = Connected */
+            box-shadow: 0 0 10px #23d160;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <h1>Internal Temp</h1>
+        <div class="temp-display">
+            <span id="temp-val">--.-</span><span class="unit">°C</span>
+        </div>
+        <div class="status-footer">
+            <div id="dot" class="status-dot"></div>
+            <span id="status-text">Connecting...</span>
+        </div>
+    </div>
+
+    <script>
+        // DOM Element Selection
+        const tempElement = document.getElementById('temp-val');
+        const statusText = document.getElementById('status-text');
+        const dot = document.getElementById('dot');
+
+        /**
+         * WebSocket Setup
+         * location.host automatically detects the Pico's IP address.
+         * Make sure the route '/ws_temp' matches your Microdot @app.route.
+         */
+        console.log(location.host)
+        const socket = new WebSocket('ws://172.20.10.9:8080/ws_pico');
+        // Triggered when connection is successfully established
+        socket.onopen = () => {
+            statusText.innerText = 'Connected';
+            dot.classList.add('online');
+            console.log('[WS] Connection established');
+        };
+
+        // Triggered whenever the Pico sends new data via ws.send()
+        socket.onmessage = (event) => {
+            // Hint: event.data is the raw string sent from MicroPython
+            const value = event.data;
+            tempElement.innerText = value;
+            
+            // Log to console for debugging
+            console.log('[WS] Received Temp:', value);
+        };
+
+        // Triggered when the server closes or network is lost
+        socket.onclose = () => {
+            statusText.innerText = 'Disconnected';
+            dot.classList.remove('online');
+            tempElement.style.color = '#555';
+            console.warn('[WS] Connection lost');
+        };
+
+        // Standard error handling
+        socket.onerror = (error) => {
+            statusText.innerText = 'Error Occurred';
+            console.error('[WS] Error:', error);
+        };
+    </script>
+</body>
+</html>
