@@ -10,3 +10,6 @@ env/
 .ampy
 .pyboard
 .micropico
+
+.idea
+.vscode
