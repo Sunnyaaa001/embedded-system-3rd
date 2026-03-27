@@ -1,14 +1,31 @@
 import network
 import time
-from microdot import Microdot,Response
+from microdot import Microdot,Request
 from microdot.websocket import with_websocket,WebSocket
-from machine import ADC
+from machine import Pin,PWM
 import uasyncio
+import ubinascii
 
 wifi_list = []
 waln = None
 app = Microdot()
-temp : ADC = None
+red = None
+green = None
+blue = None
+red_int = 0
+blue_int = 0
+red_int = 0
+
+def setup():
+    global temp,red,green,blue
+    wifi_scan()
+    wifi_connect()
+    red = PWM(Pin(21))
+    green = PWM(Pin(20))
+    blue = PWM(Pin(19))
+    red.freq(1000)
+    green.freq(1000)
+    blue.freq(1000)
 
 
 def wifi_scan():
@@ -19,7 +36,8 @@ def wifi_scan():
     raw = waln.scan()
     for i, wifi in enumerate(raw):
         wifi_name = bytes(wifi[0])
-        print(f"{i+1}. {wifi_name.decode('utf-8')}")
+        wifi_mac = ubinascii.hexlify(wifi[1], ':').decode()
+        print(f"{i+1}. {wifi_name.decode('utf-8')}      MAC:[{wifi_mac.upper()}]", end= "\n")
         wifi_list.append(wifi_name.decode('utf-8'))
 
 def wifi_connect():
@@ -38,10 +56,6 @@ def wifi_connect():
                print(f"Connected!! IP:{waln.ifconfig()[0]}")
                break
 
-def get_temperature()->float:
-    raw = temp.read_u16() * 3.3 / 65535
-    result = 27 - (raw - 0.706) / 0.001721
-    return round(result,2)
 
 
 @app.route("/ws_pico")
@@ -50,19 +64,27 @@ async def websocket(request,ws:WebSocket):
     print(">>> WebSocket Handler Started!")
     try:
         while True:
-            current_pico_temp = get_temperature()
+            
             print(f"current temp: {current_pico_temp}")
             await ws.send(str(current_pico_temp))
             await uasyncio.sleep(1)
     except Exception as e:
         print(e)
-      
-       
-def setup():
-    global temp
-    wifi_scan()
-    wifi_connect()
-    temp = ADC(4)
+
+@app.get("/led/control")
+async def led_control(request:Request):
+    global red_int,blue_int,green_int
+    red_str = str(request.args.get("red", "0"))
+    red_int = int(red_str)
+    green_str = str(request.args.get("green","0"))
+    green_int = int(green_str)
+    blue_str = str(request.args.get("blue","0"))
+    blue_int = int(blue_str)
+    if red is None and green is not None and blue is not None:
+        red.duty_u16(red_int * 257)
+        green.duty_u16(green_int * 257)
+        blue.duty_u16(blue_int * 257)
+    return {"code":200}   
 
 if __name__ == "__main__":
     setup()

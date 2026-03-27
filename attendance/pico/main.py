@@ -1,4 +1,4 @@
-from machine import ADC,Pin,PWM,I2C,SPI
+from machine import Pin,PWM,I2C,SPI
 from ds1302 import DS1302
 from lcd_api import LcdApi
 from i2c_lcd import I2cLcd
@@ -6,7 +6,10 @@ import time
 import network
 import ntptime
 from mfrc522 import MFRC522
-import urequests
+from microdot import Microdot,Request,send_file
+import uasyncio
+import ujson
+import os
 
 # define variables related to LCD I2C
 I2C_ADDR = 0x27
@@ -38,10 +41,20 @@ blue = None
 
 card_scanner = None
 
-SERVER_HOST = "http://192.168.1.222:8080"
+scanner_locker = True
+
+app = Microdot()
+
+@app.after_request
+async def add_cors(request, response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = '*'
+    return response
 
 def setup():
     global i2c,lcd,rtc,spi,card_scanner,buzzer,red,green,blue
+    init_db()
     wifi_scan()
     wifi_connect()
     i2c = I2C(0,sda=Pin(0),scl=Pin(1),freq=40000)
@@ -61,7 +74,7 @@ def setup():
     blue.freq(1000)
     #init rtc
     rtc = DS1302(clk=Pin(2),dio=Pin(3),cs=Pin(4))
-    rtc.start()
+    rtc.stop()
     # ct =  rtc.date_time()
     print("--- I am here")
     ntptime.host = TIME_HOST
@@ -71,6 +84,8 @@ def setup():
     now = (local_time[0],local_time[1],local_time[2],local_time[6] + 1,local_time[3],local_time[4],local_time[5])
     print(now)
     rtc.date_time(now)
+    rtc.start()
+
         
 
 def wifi_scan():
@@ -111,7 +126,6 @@ def get_current_time():
     if now is not None:
         current_time = "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(
              now[0], now[1], now[2],now[4], now[5], now[6])
-        print(current_time)
         return current_time
 
 def show_data_on_lcd(data:dict):
@@ -139,18 +153,104 @@ def setcolor(r:int,g:int,b:int):
         red.duty_u16(r * 257)
         green.duty_u16(g * 257)
         blue.duty_u16(b * 257)
-            
-def send_data(path:str, method:str,params:dict = None)->dict:
-    path = SERVER_HOST + path
-    result = {}
-    if method == "post":
-       response =  urequests.post(url = path, json = params, timeout = 5)
-    elif method == "get":
-       print(path)
-       response = urequests.get(url=path,timeout = 5)
-    result = response.json()
-    response.close()
-    return result
+
+
+
+def init_db():
+    if "db" not in os.listdir():
+        os.mkdir("db")
+        print("Directory 'db' created.")
+
+    db_files = ["user_info.json", "attendance.json"]
+    current_files = os.listdir("db")
+    for file_name in db_files:
+        path = "db/" + file_name
+        if file_name not in current_files:
+            with open(path, 'w') as f:
+                ujson.dump({}, f)
+            print(f"File {path} initialized with {{}}")
+        else:
+            print(f"File {path} already exists.")    
+
+
+
+def save_user(data:dict):
+    db_file = "db/user_info.json"
+    with open(db_file,"r") as f:
+        data_list = ujson.load(f)
+        if not isinstance(data_list,list):
+             data_list = []
+    records = len(data_list) + 1
+    data["id"] = records         
+    data_list.append(data)
+
+    with open(db_file,"w") as f:
+        ujson.dump(data_list,f)
+
+def insert_attendance(data:dict):
+    print(data)
+    db_file = "db/attendance.json"
+    with open(db_file,"r") as f:
+        data_list = ujson.load(f)
+        if not isinstance(data_list,list):
+             data_list = []
+    now = rtc.date_time()
+    today = "{:04d}-{:02d}-{:02d}".format(now[0],now[1],now[2])
+    record = next((item for item in data_list if item["user_id"] == data["user_id"] 
+                   and item["type"] == data["type"] and str(item["current_time"]).startswith(today)),None)
+    if record:
+        record["current_time"] = data["current_time"]
+    else:
+        id = len(data_list) + 1
+        data["id"] = id
+        data_list.append(data)
+    print(f"attendance data {data_list}")    
+    with open(db_file,"w") as f:
+        ujson.dump(data_list,f)    
+
+def user_exist(uid:str) -> bool:
+    db_file = "db/user_info.json"
+    with open(db_file,"r") as f:
+        data_list = ujson.load(f)
+        if not isinstance(data_list,list):
+             data_list = []
+    if len(data_list) == 0:
+        return False
+    user = next((u for u in data_list if u["uid"] == uid),None) 
+    if user:
+        return True
+    else:
+        return False
+
+def user_info(uid:str)->dict:
+    db_file = "db/user_info.json"
+    with open(db_file,"r") as f:
+        data_list = ujson.load(f)
+        if not isinstance(data_list,list):
+             data_list = []
+
+    user = next((u for u in data_list if u["uid"] == uid),{})
+    return user
+
+def check_attendance(user_id:str) -> bool:
+     db_file = "db/attendance.json"
+     with open(db_file,"r") as f:
+        data_list = ujson.load(f)
+        if not isinstance(data_list,list):
+             data_list = []
+     print(data_list)        
+     now = rtc.date_time()
+     today = "{:04d}-{:02d}-{:02d}".format(now[0],now[1],now[2])
+     records = [item for item in data_list if item["user_id"] == user_id 
+           and str(item["current_time"]).startswith(today)]
+     print(f"r-----{records}")
+     if len(records) == 0:
+         return True
+     else:
+         return False
+     
+
+
 
 def play_sound(start_freq, end_freq, duration_ms,volume = 30):
     if buzzer is not None:
@@ -172,7 +272,7 @@ def alert_check_in():
     setcolor(0,0,0)
 
 def alert_check_out():
-    setcolor(255,165,0)
+    setcolor(255,255,100)
     play_sound(2000,800,2000,volume=30)
     setcolor(0,0,0)
 
@@ -181,78 +281,164 @@ def alert_unknown():
     play_sound(1000,1000,1000,volume=30)
     setcolor(0,0,0)
 
-def loop():
-    global last_time
+async def loop():
+    global last_time, scanner_locker
+    while True:
+        if scanner_locker:
+            uid = uid_read()
+            if uid == "":
+                current_timestamp = time.time()
+                if current_timestamp - last_time >= 1:
+                    last_time = current_timestamp
+                    current_time = str(get_current_time())
+                    lcd.move_to(0,0)
+                    lcd.putstr(current_time.split(" ")[0])
+                    lcd.move_to(0,1)
+                    lcd.putstr(current_time.split(" ")[1])
+            else:
+                print(uid)
+                now = get_current_time()
+                is_user = user_exist(uid)
+                if not is_user:
+                    lcd.clear()
+                    lcd.move_to(0,0)
+                    lcd.putstr("Uknown Card")
+                    alert_unknown()
+                    lcd.clear()
+                    await uasyncio.sleep(0.1)
+                    continue
+                userInfo = user_info(uid)
+                username = userInfo["first_name"]
+                check_flag = check_attendance(userInfo["id"])
+                if check_flag:
+                    check_in_param = {
+                        "user_id":userInfo["id"],
+                        "type":"0",
+                        "current_time":now
+                    } 
+                    insert_attendance(check_in_param)
+                    checkinshow = {
+                        "username": "Hello " + username,
+                        "current_time":now
+                    }
+                    lcd.clear()
+                    show_data_on_lcd(checkinshow)
+                    alert_check_in()
+                    lcd.clear()
+                else:
+                    check_out_param = {
+                        "user_id":userInfo["id"],
+                        "type":"1",
+                        "current_time":now
+                    } 
+                    insert_attendance(check_out_param)
+                    checkoutshow = {
+                        "username":"Good Bye "+username,
+                        "current_time":now
+                    }
+                    lcd.clear()
+                    show_data_on_lcd(checkoutshow)
+                    print("hello I'm check out")
+                    alert_check_out()
+                await uasyncio.sleep(2)
+                lcd.clear()
+        
+        await uasyncio.sleep(0.1)
+
+@app.get("/uid/info")
+async def get_uid(request):
+    global scanner_locker
+    scanner_locker = False
+    headers = {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*"
+    }
     while True:
         uid = uid_read()
-        if uid == "":
-            current_timestamp = time.time()
-            if current_timestamp - last_time >= 1:
-               last_time = current_timestamp
-               current_time = str(get_current_time())
-               lcd.move_to(0,0)
-               lcd.putstr(current_time.split(" ")[0])
-               lcd.move_to(0,1)
-               lcd.putstr(current_time.split(" ")[1])
-        else:
-            print(uid)
-            #get current time
-            now = get_current_time()
-            # check this uid whether exist in Database
-            path = f"/user/check?uid={uid}"
-            userResult = send_data(path,"get")
-            user_exist = bool(userResult["data"])
-            if not user_exist:
-                ## make buzzer have unknown sound
-                alert_unknown()
-                continue
-            # get user information
-            user_info_path = f"/user/info?uid={uid}"
-            userInfo = send_data(user_info_path,"get")
-            username = userInfo["data"]["username"] 
-            ##check attendance record
-            is_check_path = f"/check/attendance?uid={uid}"
-            isCheckResult = send_data(is_check_path,"get")
-            check_flag = bool(isCheckResult["data"])
-            if check_flag:
-                # add check-in data 
-                check_in_param = {
-                    "uid":uid,
-                    "type":"0",
-                    "current_time":now
-                }
-                check_in_path = f"/insert/attendance"  
-                send_data(check_in_path,"post",check_in_param)
-                checkinshow = {
-                    "username":username,
-                    "current_time":now
-                }
-                show_data_on_lcd(checkinshow)
-                # check-in sound
-                alert_check_in()
-            else:
-                # add check-in data 
-                check_out_param = {
-                    "uid":uid,
-                    "type":"1",
-                    "current_time":now
-                }
-                check_in_path = f"/insert/attendance"  
-                send_data(check_in_path,"post",check_out_param)
-                checkoutshow = {
-                    "username":username,
-                    "current_time":now
-                }
-                lcd.clear()
-                show_data_on_lcd(checkoutshow)
-                # check-in sound
-                print("hello I'm check out")
-                alert_check_out()
-            time.sleep(2)
+        if uid != "":
             lcd.clear()
+            lcd.move_to(0,0)
+            lcd.putstr("Scan Sucessfully!")
+            alert_check_in()
+            lcd.clear()
+            scanner_locker = True
+            return ujson.dumps({"code":200,"data":uid}),200,headers
+        else:
+            lcd.move_to(0,0)
+            lcd.putstr("Waiting user scan card..")
+        await uasyncio.sleep(0.1)
 
-def main():
+@app.route("/insert/user", methods=["POST", "OPTIONS"])
+async def insert_user_info(request):
+    h = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Content-Type": "application/json"
+    }
+    if request.method == "OPTIONS":
+        return "", 204, h
+
+    try:
+        import gc
+        gc.collect()
+        
+        data = request.json
+        if not data:
+            import ujson
+            data = ujson.loads(request.body) 
+
+        print("Data received:", data)
+        save_user(data)
+        
+        return {"code": 200, "msg": "ok"}, 200, h     
+    except Exception as e:
+        print("Error in POST:", e)
+
+        return {"code": 500, "error": str(e)}, 500, h
+
+@app.route("/attendance/show",methods=["GET","OPTIONS"])
+async def attendance_show(request:Request):
+    headers = {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization" 
+    }
+
+    if request.method == "OPTIONS":
+        return "", 204, headers
+    db_file = "db/user_info.json"
+    with open(db_file,"r") as f:
+        users = ujson.load(f)
+        if not isinstance(users,list):
+             users = []
+
+    db_file = "db/attendance.json"
+    with open(db_file,"r") as f:
+        attendance_list = ujson.load(f)
+        if not isinstance(attendance_list,list):
+             attendance_list = []
+
+    for user in users:
+        now = rtc.date_time()
+        today = "{:04d}-{:02d}-{:02d}".format(now[0],now[1],now[2])
+        attendance = [at for at in attendance_list if at["user_id"] == user["id"] and str(at["current_time"]).startswith(today)]
+        user["attendance"] =attendance
+
+    return ujson.dumps({"code":200,"data":users}),200,headers                     
+
+
+@app.route('/')
+async def index(request):
+    return send_file('static/index.html')
+
+@app.route('/<path:path>')
+async def static(request, path):
+    return send_file(path)
+
+
+if __name__ == "__main__":
     setup()
-    loop()
-
-main()
+    uasyncio.create_task(loop())
+    app.run(port=8081,debug=True)
