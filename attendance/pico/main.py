@@ -25,8 +25,8 @@ wifi_list = []
 waln = None
 buzzer = None
 
-TIME_HOST = "0.nl.pool.ntp.org"
-UTC_OFFSET = 1 * 3600
+TIME_HOST = "time.google.com"
+UTC_OFFSET = 2 * 3600
 
 spi = None
 MISO = 12

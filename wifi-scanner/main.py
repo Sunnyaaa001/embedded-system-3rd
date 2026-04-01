@@ -5,19 +5,22 @@ from microdot.websocket import with_websocket,WebSocket
 from machine import Pin,PWM
 import uasyncio
 import ubinascii
+import ujson
 
 wifi_list = []
 waln = None
 app = Microdot()
-red = None
-green = None
-blue = None
+red:PWM = None
+green:PWM = None
+blue:PWM = None
 red_int = 0
 blue_int = 0
 red_int = 0
 
+color_reset_button = None
+
 def setup():
-    global temp,red,green,blue
+    global temp,red,green,blue,color_reset_button
     wifi_scan()
     wifi_connect()
     red = PWM(Pin(21))
@@ -26,6 +29,19 @@ def setup():
     red.freq(1000)
     green.freq(1000)
     blue.freq(1000)
+    color_reset_button = Pin(13,Pin.PULL_UP)
+
+
+def loop():
+    global red_int,green_int,blue_int
+    while True:
+        if color_reset_button is not None:
+            value = color_reset_button.value()
+            if value == 0:
+                selectColor(0,0,0)
+                red_int = 0
+                green_int = 0
+                blue_int = 0
 
 
 def wifi_scan():
@@ -56,7 +72,11 @@ def wifi_connect():
                print(f"Connected!! IP:{waln.ifconfig()[0]}")
                break
 
-
+def selectColor(r:int,g:int,b:int):
+    if red is not None and green is not None and blue is not None:
+        red.duty_u16(r * 257)
+        green.duty_u16(g * 257)
+        blue.duty_u16(b * 257)
 
 @app.route("/ws_pico")
 @with_websocket
@@ -64,9 +84,12 @@ async def websocket(request,ws:WebSocket):
     print(">>> WebSocket Handler Started!")
     try:
         while True:
-            
-            print(f"current temp: {current_pico_temp}")
-            await ws.send(str(current_pico_temp))
+            rgb_color = {
+                "red":red_int,
+                "green":green_int,
+                "blue":blue_int
+            }
+            await ws.send(ujson.dumps(rgb_color))
             await uasyncio.sleep(1)
     except Exception as e:
         print(e)
@@ -80,13 +103,11 @@ async def led_control(request:Request):
     green_int = int(green_str)
     blue_str = str(request.args.get("blue","0"))
     blue_int = int(blue_str)
-    if red is None and green is not None and blue is not None:
-        red.duty_u16(red_int * 257)
-        green.duty_u16(green_int * 257)
-        blue.duty_u16(blue_int * 257)
-    return {"code":200}   
+    return {"code":200}
+   
 
 if __name__ == "__main__":
     setup()
+    uasyncio.create_task(loop())
     app.run(port=8080,debug=True)
 
